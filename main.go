@@ -2,166 +2,134 @@ package main
 
 import (
 	"fmt"
+	"golang.org/x/image/font/sfnt"
 	"io"
-	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"golang.org/x/image/font/sfnt"
 )
 
 func main() {
-	// Specify the input and output directories
-	inputDir := "./input_fonts"   // Replace with your input directory path
-	outputDir := "./output_fonts" // Replace with your output directory path
+	const (
+		inputDir  = "./input_fonts"
+		outputDir = "./output_fonts"
+	)
 
-	// Create the output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		log.Fatalf("Failed to create output directory: %v", err)
+	// Create output directory
+	if err := os.MkdirAll(outputDir, 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create output directory: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Read the input directory
-	files, err := ioutil.ReadDir(inputDir)
+	// Walk directory for better handling of subdirectories
+	err := filepath.WalkDir(inputDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error accessing %s: %v\n", path, err)
+			return nil // Continue processing other files
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		return processFontFile(path, outputDir)
+	})
 	if err != nil {
-		log.Fatalf("Failed to read input directory: %v", err)
-	}
-
-	// Iterate through each file in the input directory
-	for _, file := range files {
-		// Skip directories
-		if file.IsDir() {
-			continue
-		}
-
-		// Construct the full input file path
-		inputPath := filepath.Join(inputDir, file.Name())
-
-		// Read the font file
-		fontData, err := ioutil.ReadFile(inputPath)
-		if err != nil {
-			log.Printf("Failed to read file %s: %v", file.Name(), err)
-			continue
-		}
-
-		// Parse the font file
-		parsedFont, err := sfnt.Parse(fontData)
-		if err != nil {
-			log.Printf("Failed to parse font file %s: %v", file.Name(), err)
-			continue
-		}
-
-		// Extract the font metadata
-		metadata, err := getFontMetadata(parsedFont)
-		if err != nil {
-			log.Printf("Failed to extract metadata for %s: %v", file.Name(), err)
-			continue
-		}
-
-		// Get the FamilyName, FullName, and SubfamilyName
-		familyName, ok := metadata["FamilyName"]
-		if !ok || familyName == "" {
-			log.Printf("No FamilyName found for %s, using original filename", file.Name())
-			familyName = file.Name()
-		}
-		fullName, ok := metadata["FullName"]
-		if !ok || fullName == "" {
-			log.Printf("No FullName found for %s, using original filename", file.Name())
-			fullName = file.Name()
-		}
-		subfamilyName, _ := metadata["SubfamilyName"] // May be empty
-
-		// Log metadata for debugging
-		log.Printf("File: %s, FamilyName: %s, SubfamilyName: %s, FullName: %s",
-			file.Name(), familyName, subfamilyName, fullName)
-
-		// Sanitize names for filesystem
-		safeFamilyName := sanitizeFileName(familyName)
-		safeFullName := sanitizeFileName(fullName)
-
-		// Determine the font type and appropriate extension
-		extension, err := getFontExtension(fontData)
-		if err != nil {
-			log.Printf("Could not determine font type for %s, defaulting to .ttf: %v", file.Name(), err)
-			extension = ".ttf"
-		}
-
-		// Determine the output subdirectory based on style
-		var subDir string
-		// Include Regular, Italic, and Bold in the base family folder
-		regularStyles := []string{"regular", "italic", "bold"}
-		isRegularStyle := false
-		for _, style := range regularStyles {
-			if strings.Contains(strings.ToLower(subfamilyName), style) || subfamilyName == "" {
-				isRegularStyle = true
-				break
-			}
-		}
-		if isRegularStyle {
-			// Regular, Italic, and Bold fonts go in the FamilyName folder
-			subDir = safeFamilyName
-		} else {
-			// Other styles (e.g., Black, Light) go in FamilyName_Style folder
-			style := strings.ReplaceAll(subfamilyName, " ", "_")
-			if style == "" {
-				style = "Unknown"
-			}
-			subDir = fmt.Sprintf("%s_%s", safeFamilyName, sanitizeFileName(style))
-		}
-
-		// Create the subdirectory
-		subDirPath := filepath.Join(outputDir, subDir)
-		if err := os.MkdirAll(subDirPath, 0755); err != nil {
-			log.Printf("Failed to create subdirectory %s: %v", subDirPath, err)
-			continue
-		}
-
-		// Construct the output file path
-		outputFileName := safeFullName + extension
-		outputPath := filepath.Join(subDirPath, outputFileName)
-
-		// Check for duplicate filenames
-		outputPath, err = resolveDuplicate(outputPath)
-		if err != nil {
-			log.Printf("Failed to resolve output path for %s: %v", file.Name(), err)
-			continue
-		}
-
-		// Copy the file to the output directory
-		if err := copyFile(inputPath, outputPath); err != nil {
-			log.Printf("Failed to copy file %s to %s: %v", file.Name(), outputPath, err)
-			continue
-		}
-
-		fmt.Printf("Copied %s to %s\n", file.Name(), outputPath)
+		fmt.Fprintf(os.Stderr, "Failed to walk input directory: %v\n", err)
+		os.Exit(1)
 	}
 }
 
-// getFontMetadata extracts metadata like font family, full name, and subfamily
-func getFontMetadata(f *sfnt.Font) (map[string]string, error) {
-	metadata := make(map[string]string)
+func processFontFile(inputPath, outputDir string) error {
+	// Open font file as a stream
+	fontFile, err := os.Open(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to open file %s: %v", inputPath, err)
+	}
+	defer fontFile.Close()
 
-	// Iterate through the name table entries
-	for _, nameID := range []sfnt.NameID{
-		sfnt.NameIDFamily,
-		sfnt.NameIDSubfamily,
-		sfnt.NameIDFull,
-		sfnt.NameIDPostScript,
-	} {
-		name, err := f.Name(nil, nameID)
-		if err != nil {
-			continue // Skip if the name ID is not found
-		}
-		switch nameID {
-		case sfnt.NameIDFamily:
-			metadata["FamilyName"] = name
-		case sfnt.NameIDSubfamily:
-			metadata["SubfamilyName"] = name
-		case sfnt.NameIDFull:
-			metadata["FullName"] = name
-		case sfnt.NameIDPostScript:
-			metadata["PostScriptName"] = name
+	// Read only the necessary bytes for parsing
+	fontData := io.LimitReader(fontFile, 64*1024*1024) // limit to 64MB or as needed
+	buf, err := io.ReadAll(fontData)
+	if err != nil {
+		return fmt.Errorf("failed to read font data from %s: %v", inputPath, err)
+	}
+
+	// Parse font
+	parsedFont, err := sfnt.Parse(buf)
+	if err != nil {
+		return fmt.Errorf("failed to parse font %s: %v", inputPath, err)
+	}
+
+	// Get metadata
+	metadata, err := getFontMetadata(parsedFont)
+	if err != nil {
+		return fmt.Errorf("failed to extract metadata for %s: %v", inputPath, err)
+	}
+
+	// Extract and validate names
+	familyName := metadata["FamilyName"]
+	if familyName == "" {
+		familyName = filepath.Base(inputPath)
+		fmt.Fprintf(os.Stderr, "No FamilyName for %s, using filename\n", inputPath)
+	}
+	fullName := metadata["FullName"]
+	if fullName == "" {
+		fullName = filepath.Base(inputPath)
+		fmt.Fprintf(os.Stderr, "No FullName for %s, using filename\n", inputPath)
+	}
+	subfamilyName := metadata["SubfamilyName"]
+
+	// Sanitize names
+	safeFamilyName := sanitizeFileName(familyName)
+	safeFullName := sanitizeFileName(fullName)
+
+	// Determine extension
+	extension, err := getFontExtension(buf)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Unknown font type for %s, defaulting to .ttf: %v\n", inputPath, err)
+		extension = ".ttf"
+	}
+
+	// Determine subdirectory
+	subDir := safeFamilyName
+	if subfamilyName != "" && !isRegularStyle(subfamilyName) {
+		subDir = fmt.Sprintf("%s_%s", safeFamilyName, sanitizeFileName(strings.ReplaceAll(subfamilyName, " ", "_")))
+	}
+
+	// Create subdirectory
+	subDirPath := filepath.Clean(filepath.Join(outputDir, subDir))
+	if err := os.MkdirAll(subDirPath, 0700); err != nil {
+		return fmt.Errorf("failed to create subdirectory %s: %v", subDirPath, err)
+	}
+
+	// Construct and resolve output path
+	outputPath := filepath.Clean(filepath.Join(subDirPath, safeFullName+extension))
+	outputPath, err = resolveDuplicate(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve output path for %s: %v", inputPath, err)
+	}
+
+	// Copy file
+	if err := copyFile(inputPath, outputPath); err != nil {
+		return fmt.Errorf("failed to copy %s to %s: %v", inputPath, outputPath, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Processed %s to %s\n", filepath.Base(inputPath), outputPath)
+	return nil
+}
+
+func getFontMetadata(f *sfnt.Font) (map[string]string, error) {
+	metadata := make(map[string]string, 4)
+	nameIDs := map[sfnt.NameID]string{
+		sfnt.NameIDFamily:     "FamilyName",
+		sfnt.NameIDSubfamily:  "SubfamilyName",
+		sfnt.NameIDFull:       "FullName",
+		sfnt.NameIDPostScript: "PostScriptName",
+	}
+
+	for nameID, key := range nameIDs {
+		if name, err := f.Name(nil, nameID); err == nil && name != "" {
+			metadata[key] = name
 		}
 	}
 
@@ -171,81 +139,83 @@ func getFontMetadata(f *sfnt.Font) (map[string]string, error) {
 	return metadata, nil
 }
 
-// getFontExtension determines the font file extension based on its header
 func getFontExtension(fontData []byte) (string, error) {
 	if len(fontData) < 4 {
 		return "", fmt.Errorf("font data too short")
 	}
 
-	// Check the first 4 bytes of the font file
-	header := string(fontData[:4])
-	switch header {
+	switch string(fontData[:4]) {
 	case "OTTO":
-		return ".otf", nil // OpenType with PostScript outlines
+		return ".otf", nil
 	case "\x00\x01\x00\x00", "true":
-		return ".ttf", nil // TrueType or OpenType with TrueType outlines
+		return ".ttf", nil
 	default:
-		return "", fmt.Errorf("unknown font signature: %x", header)
+		return "", fmt.Errorf("unknown font signature: %x", fontData[:4])
 	}
 }
 
-// sanitizeFileName replaces invalid or unsafe characters in a filename
 func sanitizeFileName(name string) string {
-	// Replace invalid characters (e.g., /, \, :, *, ?, <, >, |) with underscores
-	invalidChars := []string{"/", "\\", ":", "*", "?", "<", ">", "|", "\""}
+	invalidChars := []rune{'/', '\\', ':', '*', '?', '<', '>', '|', '"'}
 	for _, char := range invalidChars {
-		name = strings.ReplaceAll(name, char, "_")
+		name = strings.ReplaceAll(name, string(char), "_")
 	}
-	// Replace spaces with underscores for consistency
-	//name = strings.ReplaceAll(name, " ", "_")
-	// Trim any leading/trailing underscores or spaces
-	name = strings.Trim(name, "_ ")
-	if name == "" {
-		name = "unnamed"
-	}
-	return name
+	return strings.Trim(name, "_ ") + func() string {
+		if name == "" {
+			return "unnamed"
+		}
+		return ""
+	}()
 }
 
-// resolveDuplicate ensures the output filename is unique by appending a counter if needed
 func resolveDuplicate(outputPath string) (string, error) {
+	const maxAttempts = 1000
 	ext := filepath.Ext(outputPath)
 	baseName := strings.TrimSuffix(filepath.Base(outputPath), ext)
 	dir := filepath.Dir(outputPath)
-	for i := 1; ; i++ {
-		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-			return outputPath, nil
+
+	for i := 0; i < maxAttempts; i++ {
+		path := outputPath
+		if i > 0 {
+			path = filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i, ext))
 		}
-		// Append a counter to the filename (e.g., Helvetica_Regular_1.ttf)
-		outputPath = filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i, ext))
-		if i > 1000 { // Arbitrary limit to prevent infinite loops
-			return "", fmt.Errorf("too many duplicates for %s", baseName)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return path, nil
 		}
 	}
+	return "", fmt.Errorf("too many duplicates for %s", baseName)
 }
 
-// copyFile copies a file from src to dst
 func copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
+	srcFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer sourceFile.Close()
+	defer srcFile.Close()
 
-	destFile, err := os.Create(dst)
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
-	defer destFile.Close()
+	defer dstFile.Close()
 
-	_, err = io.Copy(destFile, sourceFile)
-	if err != nil {
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
 		return err
 	}
 
-	// Ensure the copied file has the same permissions as the source
-	sourceInfo, err := os.Stat(src)
+	srcInfo, err := srcFile.Stat()
 	if err != nil {
 		return err
 	}
-	return os.Chmod(dst, sourceInfo.Mode())
+	return os.Chmod(dst, srcInfo.Mode())
+}
+
+func isRegularStyle(subfamilyName string) bool {
+	regularStyles := []string{"regular", "italic", "bold"}
+	lowerSubfamily := strings.ToLower(subfamilyName)
+	for _, style := range regularStyles {
+		if strings.Contains(lowerSubfamily, style) {
+			return true
+		}
+	}
+	return false
 }
