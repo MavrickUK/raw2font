@@ -1,70 +1,78 @@
 package main
 
 import (
-	"OrganizedFonts/fontprocessor" // Replace with your module name
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"OrganizedFonts/fontprocessor"
 )
 
 func main() {
-	// Specify the input and output directories
+	// Specify input and output directories
 	inputDir := "input_fonts"   // Replace with your input directory path
 	outputDir := "output_fonts" // Replace with your output directory path
 
-	// Create the output directory if it doesn't exist
+	// Create output directory
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		log.Fatalf("Failed to create output directory: %v", err)
 	}
 
-	// Set up logging to a timestamped file with UTF-8+BOM and stderr
-	logWriter, err := setupLogging(outputDir)
+	// Set up logging
+	logWriter, logFileName, err := setupLogging(outputDir)
 	if err != nil {
 		log.Fatalf("Failed to set up logging: %v", err)
 	}
 	defer logWriter.Close()
 
-	// Read the input directory
-	files, err := os.ReadDir(inputDir)
+	// Process font files
+	err = filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			log.Printf("Error accessing path %s: %v", path, err)
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		// Filter for no-extension files or Type 1 fonts
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != "" && ext != ".pfa" && ext != ".pfb" {
+			return nil
+		}
+		// Process font file
+		if err := fontprocessor.ProcessFontFile(inputDir, path, outputDir, logWriter); err != nil {
+			log.Printf("Failed to process file %s: %v", path, err)
+			return nil
+		}
+		return nil
+	})
 	if err != nil {
-		log.Fatalf("Failed to read input directory: %v", err)
+		log.Printf("Error walking input directory: %v", err)
 	}
 
-	// Process each file
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-		inputPath := filepath.Join(inputDir, file.Name())
-		if err := fontprocessor.ProcessFontFile(inputPath, outputDir, logWriter); err != nil {
-			log.Printf("Failed to process file %s: %v", file.Name(), err)
-			continue
-		}
-	}
+	// Print log file creation message as last terminal output
+	fmt.Fprintf(os.Stdout, "Log file created: %s\n", logFileName)
 }
 
-// setupLogging creates a timestamped log file with UTF-8+BOM and configures logging
-func setupLogging(outputDir string) (io.WriteCloser, error) {
+func setupLogging(outputDir string) (io.WriteCloser, string, error) {
 	logFileName := filepath.Join(outputDir, fmt.Sprintf("Log_%s.txt", time.Now().Format("20060102150405")))
 	logFile, err := os.Create(logFileName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create log file %s: %v", logFileName, err)
+		return nil, "", fmt.Errorf("failed to create log file %s: %v", logFileName, err)
 	}
 
 	// Write UTF-8 BOM
-	_, err = logFile.Write([]byte{0xEF, 0xBB, 0xBF})
-	if err != nil {
+	if _, err := logFile.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
 		logFile.Close()
-		return nil, fmt.Errorf("failed to write UTF-8 BOM to log file: %v", err)
+		return nil, "", fmt.Errorf("failed to write UTF-8 BOM: %v", err)
 	}
 
-	// Set up logging to both file and stderr
-	multiWriter := io.MultiWriter(logFile, os.Stderr)
-	log.SetOutput(multiWriter)
-	log.SetFlags(log.LstdFlags) // Include timestamp in logs
-
-	return logFile, nil
+	// Set up logging to file and stderr
+	log.SetOutput(io.MultiWriter(logFile, os.Stderr))
+	log.SetFlags(log.LstdFlags)
+	return logFile, logFileName, nil
 }
