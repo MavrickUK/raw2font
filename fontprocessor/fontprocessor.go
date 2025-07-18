@@ -66,9 +66,12 @@ func ProcessFontFile(inputDir, inputPath, outputDir string, logWriter io.Writer)
 	}
 
 	// Resolve duplicates
-	outputPath, err = resolveDuplicate(outputPath)
+	outputPath, isDuplicate, err := resolveDuplicate(outputPath, logWriter)
 	if err != nil {
 		return fmt.Errorf("failed to resolve output path for %s: %v", filepath.Base(inputPath), err)
+	}
+	if isDuplicate {
+		return nil // Termina el procesamiento si es un duplicado
 	}
 
 	// Copy file
@@ -393,17 +396,21 @@ func sanitizeFileName(name string) string {
 	return name
 }
 
-func resolveDuplicate(path string) (string, error) {
+func resolveDuplicate(path string, logWriter io.Writer) (string, bool, error) {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	dir := filepath.Dir(path)
 	ext := filepath.Ext(path)
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintf(logWriter, "La fuente '%s' ya existe\n", filepath.Base(path))
+		return "", true, nil // Retorna true para indicar que es un duplicado
+	}
 	for i := 1; ; i++ {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return path, nil
+			return path, false, nil
 		}
 		path = filepath.Join(dir, fmt.Sprintf("%s %d%s", base, i, ext))
 		if i > 100 {
-			return "", fmt.Errorf("too many duplicates for %s", base)
+			return "", false, fmt.Errorf("too many duplicates for %s", base)
 		}
 	}
 }
