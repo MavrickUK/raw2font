@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Raw2Font/fontprocessor"
 	"fmt"
 	"io"
 	"log"
@@ -8,13 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"OrganizedFonts/fontprocessor"
 )
 
 func main() {
 	// Specify input and output directories
-	inputDir := "input_fonts"   // Replace with your input directory path
+	inputDir := "raw_fonts"     // Replace with your input directory path
 	outputDir := "output_fonts" // Replace with your output directory path
 
 	// Create output directory

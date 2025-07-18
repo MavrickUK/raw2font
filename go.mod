@@ -1,4 +1,4 @@
-module OrganizedFonts
+module Raw2Font
 
 go 1.24
 
