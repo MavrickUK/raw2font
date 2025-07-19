@@ -2,7 +2,7 @@
 
 ## Overview
 
-Font Processor is a Go application designed to organize and rename font files by extracting their metadata. It processes font files (TrueType, OpenType, and Type 1) with or without extensions, renaming them based on their `FamilyName`, `SubfamilyName`, and `FullName` metadata and organizing them into directories by `FamilyName`. The application handles variable fonts (e.g., `Chidori VF`, `Brevia Light`) without splitting them, supports filenames with spaces, and gracefully manages errors such as invalid `hmtx` or `CFF` tables.
+Raw2Font is a Go application designed to organize and rename font files by extracting their metadata. It processes font files (TrueType, OpenType, and Type 1) with or without extensions, renaming them based on their `FamilyName`, `SubfamilyName`, and `FullName` metadata and organizing them into directories by `FamilyName`. The application handles variable fonts (e.g., `Chidori VF`, `Brevia Light`) without splitting them, supports filenames with spaces, and gracefully manages errors such as invalid `hmtx` or `CFF` tables.
 
 ## Features
 
